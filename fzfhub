@@ -1,0 +1,191 @@
+#!/bin/sh -e
+
+# Set NOHUB if hub isn't on the PATH
+if ! command -v hub > /dev/null 2>&1; then
+	FZFHUB_NOHUB=1
+fi
+
+while getopts s o; do
+	case "$o" in
+		s) SINGLE_ACTION=1;;
+		*) echo 'Invalid option' >&2; exit 1;;
+	esac
+done
+
+TAB=$(printf '\t')
+
+# Cleanup after fzf --no-clear and tmp files
+trap 'tput rmcup;
+	rm -f "$ISSUE_PLAINTEXT" "$response" "$issue_titles"' \
+	EXIT HUP QUIT TERM
+
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/fzfhub
+mkdir -p "$CACHE_DIR"
+
+# Talk to the GitHub API
+hub() {
+	if [ "$FZFHUB_NOHUB" ]; then
+		case "$1" in
+			api)
+				curl -Ss "https://api.github.com/$2";;
+			*)
+				echo "$1 unimplemented for NOHUB" >&2; exit 1;;
+		esac
+	else
+		env hub "$@"
+	fi
+}
+
+# Script defaults for fzf
+fzf() {
+	env fzf --reverse --preview-window=:wrap --no-clear "$@" || :
+}
+
+# Use fzf to query for user input 
+fzf_query() {
+	: | fzf --bind=enter:print-query "$@"
+}
+
+# Searches for a repo
+search_repo() {
+	hub api "search/repositories?q=$1" |
+		jq -jr '.items[]|.full_name,"\t",.description,"\n"' |
+		fzf --delimiter="$TAB" --with-nth=1 \
+			--preview='printf %s {2}' --header="$1" |
+		cut -f 1 -
+}
+
+ISSUE_TITLE_FORMAT='.items[] |
+	"[",(.state | sub("open"; " ") | sub("closed"; "x")),"] #"
+		,.number," ",.title
+	,"\t"
+	,.number
+,"\n"'
+
+ISSUE_PREVIEW='.items[] | select(.number == {2}) |
+	"[",.state,"] #",.number," ",.title,"\n"
+	,.html_url,"\n"
+	,"Labels: ",(.labels[] | .name?," "),"\n"
+	,"Opened at ",.created_at," by ",.user.login,"\n\n"
+	,.body
+,"\n"'
+
+search_issue() {
+	selection=$(fzf_query --prompt="search: " \
+		--query="is:open " |
+		sed 's/ /+/g')
+	[ ! "$selection" ] && return
+
+	ISSUE_PLAINTEXT=$(mktemp); response=$(mktemp); issue_titles=$(mktemp);
+
+	hub api "search/issues?q=repo:$REPO+$selection" > "$response"
+	jq -jr "$ISSUE_TITLE_FORMAT" "$response" > "$issue_titles"
+
+	while :; do
+		fzf --delimiter="$TAB" \
+			--with-nth=1 \
+			--preview="jq -jr '$ISSUE_PREVIEW' '$response' |
+				tee '$ISSUE_PLAINTEXT'" \
+			--header="$selection" \
+			< "$issue_titles" |
+		cut -f 2 - |
+		view_issue || break # error is assumed to be ^C
+	done
+
+	rm "$ISSUE_PLAINTEXT" "$response" "$issue_titles"
+}
+
+ISSUE_COMMENT_FORMAT='.[] |
+	"--------------------------------\n"
+	,.user.login," at ",.created_at,"\n"
+	,.body
+,"\n"'
+
+view_issue() {
+	issue=$(cat -); [ ! "$issue" ] && return 1;
+	tput rmcup # reset term before starting pager
+
+	hub api "repos/$REPO/issues/$issue/comments" |
+		jq -jr "$ISSUE_COMMENT_FORMAT" |
+		cat "$ISSUE_PLAINTEXT" - |
+		${PAGER:-less}
+}
+
+RELEASES_FORMAT='.[] |
+	.tag_name," published ",.published_at,"\n"
+	,.html_url,"\n"
+	,.body,"\n"
+	,.tarball_url,"\n"
+	,.zipball_url,"\n"
+	,(.assets[] | .browser_download.url?,"\n")
+,"-------------------------------\n"'
+
+view_releases() {
+	tput rmcup # cleanup
+	hub api "repos/$REPO/releases" |
+		jq -jr "$RELEASES_FORMAT" |
+		${PAGER:-less}
+}
+
+REPO_ACTIONS='search-issues-and-prs
+view-releases
+clone'
+
+# Decide what to do with the selected repo
+handle_repo() {
+	while :; do
+		selection=$(printf %s "$REPO_ACTIONS" |
+			fzf --prompt="Select action for $REPO: ")
+
+		case "$selection" in
+			search-issues-and-prs)
+				search_issue
+				;;
+			view-releases)
+				view_releases
+				;;
+			clone)
+				tput rmcup # cleanup
+				git clone --depth 1 "https://github.com/$REPO"
+				;;
+			*)
+				break
+				;;
+		esac
+
+		[ "$SINGLE_ACTION" ] && exit
+	done
+}
+
+SEL_REPO_HEADER='Select a repository
+
+<owner>/<repo> will select <repo>
+search:<repo> will start a search for <repo>
+(^p and ^n to navigate search history)'
+
+# Have the user select a repo, this is where the program starts
+select_repo() {
+	while :; do
+		REPO=$(fzf_query --header="$SEL_REPO_HEADER" \
+			--history="$CACHE_DIR/repos" \
+			--query='search:')
+		repoquery=${REPO#search:}
+
+		[ ! "$REPO" ] || [ ! "$repoquery" ] && break
+
+		if [ "$repoquery" != "$REPO" ]; then
+			repoquery=$(printf %s "$repoquery" | sed 's/ /+/g')
+			REPO=$(search_repo "$repoquery")
+
+			# Add selected repo to history
+			printf '%s\n' "$REPO" >> "$CACHE_DIR/repos"
+		fi
+
+		[ ! "$REPO" ] && break
+
+		handle_repo
+	done
+}
+
+select_repo
+
