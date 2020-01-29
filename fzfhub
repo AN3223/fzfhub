@@ -1,5 +1,7 @@
 #!/bin/sh -e
 
+# TODO allow the user to drop down into a shell
+
 # Set NOHUB if hub isn't on the PATH
 if ! command -v hub > /dev/null 2>&1; then
 	FZFHUB_NOHUB=1
@@ -41,7 +43,7 @@ fzf() {
 	env fzf --reverse --preview-window=:wrap --no-clear "$@" || :
 }
 
-# Use fzf to query for user input 
+# Use fzf to query for user input
 fzf_query() {
 	: | fzf --bind=enter:print-query "$@"
 }
@@ -74,7 +76,6 @@ search_issue() {
 	selection=$(fzf_query --prompt="search: " \
 		--query="is:open " |
 		sed 's/ /+/g')
-	[ ! "$selection" ] && return
 
 	ISSUE_PLAINTEXT=$(mktemp); response=$(mktemp); issue_titles=$(mktemp);
 
