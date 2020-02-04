@@ -17,9 +17,7 @@ done
 TAB=$(printf '\t')
 
 # Cleanup after fzf --no-clear and tmp files
-trap 'tput rmcup;
-	rm -f "$ISSUE_PLAINTEXT" "$response" "$issue_titles"' \
-	EXIT HUP QUIT TERM
+trap 'tput rmcup; rm -rf "$tmp"' EXIT HUP QUIT TERM
 
 CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/fzfhub
 mkdir -p "$CACHE_DIR"
@@ -77,23 +75,22 @@ search_issue() {
 		--query="is:open " |
 		sed 's/ /+/g')
 
-	ISSUE_PLAINTEXT=$(mktemp); response=$(mktemp); issue_titles=$(mktemp);
-
-	hub api "search/issues?q=repo:$REPO+$selection" > "$response"
-	jq -jr "$ISSUE_TITLE_FORMAT" "$response" > "$issue_titles"
+	tmp=$(mktemp -d)
+	hub api "search/issues?q=repo:$REPO+$selection" > "$tmp/response"
+	jq -jr "$ISSUE_TITLE_FORMAT" "$tmp/response" > "$tmp/issue_titles"
 
 	while :; do
 		fzf --delimiter="$TAB" \
 			--with-nth=1 \
-			--preview="jq -jr '$ISSUE_PREVIEW' '$response' |
-				tee '$ISSUE_PLAINTEXT'" \
+			--preview="jq -jr '$ISSUE_PREVIEW' '$tmp/response' |
+				tee '$tmp/issue_plaintext'" \
 			--header="$selection" \
-			< "$issue_titles" |
+			< "$tmp/issue_titles" |
 		cut -f 2 - |
 		view_issue || break # error is assumed to be ^C
 	done
 
-	rm "$ISSUE_PLAINTEXT" "$response" "$issue_titles"
+	rm -rf "$tmp"
 }
 
 ISSUE_COMMENT_FORMAT='.[] |
@@ -102,13 +99,14 @@ ISSUE_COMMENT_FORMAT='.[] |
 	,.body
 ,"\n"'
 
+# receives $tmp from caller
 view_issue() {
 	issue=$(cat -); [ ! "$issue" ] && return 1;
 	tput rmcup # reset term before starting pager
 
 	hub api "repos/$REPO/issues/$issue/comments" |
 		jq -jr "$ISSUE_COMMENT_FORMAT" |
-		cat "$ISSUE_PLAINTEXT" - |
+		cat "$tmp/issue_plaintext" - |
 		${PAGER:-less}
 }
 
