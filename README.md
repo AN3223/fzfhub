@@ -8,7 +8,7 @@ This script is in a very early stage and is missing many features, criticism and
 Git-related features are purposefully not implemented, such as code/commit search, just clone the repo and use git.
 
 ### Dependencies
-jq
+jq (compiled with ONIGURUMA)
 
 fzf
 
