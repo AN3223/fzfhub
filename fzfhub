@@ -152,7 +152,7 @@ handle_repo() {
 				;;
 		esac
 
-		[ "$SINGLE_ACTION" ] && exit
+		[ "$SINGLE_ACTION" ] && exit 0
 	done
 }
 
