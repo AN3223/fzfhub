@@ -27,7 +27,7 @@ hub() {
 	if [ "$FZFHUB_NOHUB" ]; then
 		case "$1" in
 			api)
-				curl -Ss "https://api.github.com/$2";;
+				curl -Ssf "https://api.github.com/$2";;
 			*)
 				echo "$1 unimplemented for NOHUB" >&2; exit 1;;
 		esac
